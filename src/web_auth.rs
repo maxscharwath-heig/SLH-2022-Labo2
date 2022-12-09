@@ -13,8 +13,8 @@ use axum_extra::extract::CookieJar;
 use axum_sessions::async_session::MemoryStore;
 use serde_json::json;
 use std::error::Error;
-use jsonwebtoken::{EncodingKey, Header};
 use crate::hash::hash;
+use crate::token::token;
 
 /// Declares the different endpoints
 /// state is used to pass common structs to the endpoints
@@ -37,15 +37,13 @@ async fn login(
     jar: CookieJar,
     Json(login): Json<LoginRequest>,
 ) -> Result<(CookieJar, AuthResult), Response> {
-    // TODO: Implement the login function. You can use the functions inside db.rs to check if
-    //       the user exists and get the user info.
     let _email = login.login_email;
     let _password = login.login_password;
 
     return match get_user(&mut _conn, &_email) {
         Ok(user) => {
             if hash::verify_password(&_password, &user.password) {
-                let jar = add_auth_cookie(jar, &user.to_dto())
+                let jar = add_auth_cookie(jar, user.to_dto())
                     .or(Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()))?;
                 Ok((jar, AuthResult::Success))
             } else {
@@ -73,10 +71,14 @@ async fn register(
     State(_session_store): State<MemoryStore>,
     Json(register): Json<RegisterRequest>,
 ) -> Result<AuthResult, Response> {
-    // TODO: Implement the register function. The email must be verified by sending a link.
-    //       You can use the functions inside db.rs to add a new user to the DB.
     let _email = register.register_email;
     let _password = register.register_password;
+    let _password2 = register.register_password2;
+
+    if _password != _password2 {
+        return Err(StatusCode::BAD_REQUEST.into_response());
+    }
+
     let _hashed_password = hash::password_hash(&_password);
 
     return match user_exists(&mut _conn, &_email) {
@@ -146,6 +148,7 @@ async fn oauth_redirect(
     //       was verified, get the email address with the provided function (get_oauth_email)
     //       and create a JWT for the user.
 
+
     // If you need to recover data between requests, you may use the session_store to load a session
     // based on a session_id.
 
@@ -174,15 +177,16 @@ async fn logout(jar: CookieJar) -> impl IntoResponse {
 }
 
 #[allow(dead_code)]
-fn add_auth_cookie(jar: CookieJar, _user: &UserDTO) -> Result<CookieJar, Box<dyn Error>> {
+fn add_auth_cookie(jar: CookieJar, _user: UserDTO) -> Result<CookieJar, Box<dyn Error>> {
     // TODO: You have to create a new signed JWT and store it in the auth cookie.
     //       Careful with the cookie options.
-    let jwt = jsonwebtoken::encode(
-        &Header::default(),
-        _user,
-        &EncodingKey::from_secret("secret".as_ref())
-    )?;
-    Ok(jar.add(Cookie::build("auth", jwt).finish()))
+    let jwt = token::generate_jwt(_user)?;
+    let cookie = Cookie::build("auth", jwt)
+        .path("/")
+        .secure(true)
+        .http_only(true)
+        .finish();
+    Ok(jar.add(cookie))
 }
 
 enum AuthResult {
