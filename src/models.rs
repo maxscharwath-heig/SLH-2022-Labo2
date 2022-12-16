@@ -2,7 +2,7 @@ use crate::db::Pool;
 use axum::extract::FromRef;
 use axum_sessions::async_session::MemoryStore;
 use handlebars::Handlebars;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -55,4 +55,14 @@ pub struct PasswordUpdateRequest {
 pub struct OAuthRedirect {
     pub state: String,
     pub code: String,
+}
+
+#[derive(Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
+}
+
+#[derive(Debug,Deserialize, Serialize)]
+pub struct VerifyJwtToken {
+    pub email: String,
 }

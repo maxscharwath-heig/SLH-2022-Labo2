@@ -1,7 +1,5 @@
-use crate::db::{DbConn, get_user, save_user, user_exists};
-use crate::models::{
-    AppState, LoginRequest, OAuthRedirect, PasswordUpdateRequest, RegisterRequest,
-};
+use crate::db::{DbConn, get_user, save_user, user_exists, verify_user};
+use crate::models::{AppState, LoginRequest, OAuthRedirect, PasswordUpdateRequest, RegisterRequest, VerifyEmailRequest, VerifyJwtToken};
 use crate::user::{AuthenticationMethod, User, UserDTO};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -22,6 +20,7 @@ pub fn stage(state: AppState) -> Router {
     Router::new()
         .route("/login", post(login))
         .route("/register", post(register))
+        .route("/verify", get(verify_email))
         .route("/oauth/google", get(google_oauth))
         .route("/_oauth", get(oauth_redirect))
         .route("/password_update", post(password_update))
@@ -90,7 +89,7 @@ async fn register(
                 &_email,
                 &_hashed_password,
                 AuthenticationMethod::Password,
-                true,
+                false,
             );
             match save_user(&mut _conn, user) {
                 Ok(_) => {
@@ -113,6 +112,26 @@ async fn register(
 }
 
 // TODO: Create the endpoint for the email verification function.
+async fn verify_email(
+    mut _conn: DbConn,
+    State(_session_store): State<MemoryStore>,
+    Query(_query): Query<VerifyEmailRequest>,
+) -> Result<Redirect, Response> {
+    // get token from query
+    let email = token::decode_jwt::<VerifyJwtToken>(&_query.token)
+        .map_err(|_| StatusCode::BAD_REQUEST.into_response())?
+        .email;
+
+    return match user_exists(&mut _conn, &email) {
+        Ok(_) => {
+            verify_user(&mut _conn, &email).expect("TODO: panic message");
+            Ok(Redirect::temporary("/login"))
+        }
+        Err(_) => {
+            Ok(Redirect::temporary("/login"))
+        }
+    }
+}
 
 /// Endpoint used for the first OAuth step
 /// GET /oauth/google
@@ -178,8 +197,6 @@ async fn logout(jar: CookieJar) -> impl IntoResponse {
 
 #[allow(dead_code)]
 fn add_auth_cookie(jar: CookieJar, _user: UserDTO) -> Result<CookieJar, Box<dyn Error>> {
-    // TODO: You have to create a new signed JWT and store it in the auth cookie.
-    //       Careful with the cookie options.
     let jwt = token::generate_jwt(_user)?;
     let cookie = Cookie::build("auth", jwt)
         .path("/")
