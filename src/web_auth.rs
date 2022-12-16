@@ -51,7 +51,7 @@ async fn login(
             }
         }
         Err(_) => {
-            Err("NTM".into_response())
+            Err(StatusCode::UNAUTHORIZED.into_response())
         }
     };
 

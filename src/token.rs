@@ -9,7 +9,7 @@ pub mod token {
 
     #[derive(Debug,Serialize, Deserialize)]
     struct Claims {
-        sub: UserDTO,
+        data: UserDTO,
         exp: usize,
     }
 
@@ -19,16 +19,16 @@ pub mod token {
             &token,
             &DecodingKey::from_secret(secret.as_ref()),
             &Validation::default(),
-        ).map(|data: TokenData<Claims>| data.claims.sub);
+        ).map(|data: TokenData<Claims>| data.claims.data);
     }
 
-    pub fn generate_jwt(sub: UserDTO) -> jsonwebtoken::errors::Result<String> {
+    pub fn generate_jwt(data: UserDTO) -> jsonwebtoken::errors::Result<String> {
         let secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
         let exp = (Utc::now().timestamp() + 3600) as usize;
         return jsonwebtoken::encode(
             &Header::default(),
             &Claims {
-                sub,
+                data,
                 exp,
             },
             &EncodingKey::from_secret(secret.as_ref()),
