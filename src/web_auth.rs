@@ -1,3 +1,4 @@
+use std::env;
 use crate::db::{DbConn, get_user, save_user, user_exists, verify_user};
 use crate::models::{AppState, LoginRequest, OAuthRedirect, PasswordUpdateRequest, RegisterRequest, VerifyEmailRequest, VerifyJwtToken};
 use crate::user::{AuthenticationMethod, User, UserDTO};
@@ -11,8 +12,16 @@ use axum_extra::extract::CookieJar;
 use axum_sessions::async_session::MemoryStore;
 use serde_json::json;
 use std::error::Error;
+use std::fmt::format;
+use axum_sessions::async_session::log::info;
+use lettre::{Message, SmtpTransport, Transport};
+use lettre::message::{header, MultiPart, SinglePart};
+use lettre::transport::smtp::authentication::Credentials;
+use serde_json::Value::String;
 use crate::hash::hash;
+use crate::schema::users::email;
 use crate::token::token;
+use maud::html;
 
 /// Declares the different endpoints
 /// state is used to pass common structs to the endpoints
@@ -41,7 +50,7 @@ async fn login(
 
     return match get_user(&mut _conn, &_email) {
         Ok(user) => {
-            if hash::verify_password(&_password, &user.password) {
+            if hash::verify_password(&_password, &user.password) && user.email_verified {
                 let jar = add_auth_cookie(jar, user.to_dto())
                     .or(Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()))?;
                 Ok((jar, AuthResult::Success))
@@ -50,6 +59,8 @@ async fn login(
             }
         }
         Err(_) => {
+            // fake hash to prevent timing attacks
+            hash::verify_password(&_password, &_password);
             Err(StatusCode::UNAUTHORIZED.into_response())
         }
     };
@@ -93,6 +104,7 @@ async fn register(
             );
             match save_user(&mut _conn, user) {
                 Ok(_) => {
+                    send_verification_email(&_email);
                     Ok(AuthResult::Success)
                 }
                 Err(e) => {
@@ -111,26 +123,74 @@ async fn register(
     //Ok(AuthResult::Success)
 }
 
+fn send_verification_email(_email: &str) {
+    let _token = token::generate_jwt(VerifyJwtToken {
+        email: _email.to_string(),
+    }, 10 * 60).expect("Failed to generate token");
+    let _url = format!(
+        "{}/verify?token={}",
+        env::var("APP_URL").expect("APP_URL must be set"),
+        _token
+    );
+
+    let html = html! {
+        div {
+            h1 { "Verify your email" }
+            p { "Please click the link below to verify your email" }
+            a href=(_url) { (_url) }
+        }
+    };
+
+    let message = Message::builder()
+        .from("SLH Labs <sdr@heig-vd.ch>".parse().unwrap())
+        .to(_email.parse().unwrap())
+        .subject("Verify your email")
+        .multipart(
+            MultiPart::alternative() // This is composed of two parts.
+                .singlepart(
+                    SinglePart::builder()
+                        .header(header::ContentType::TEXT_PLAIN)
+                        .body(format!("Please click the link below to verify your email: {}", _url)),
+                )
+                .singlepart(
+                    SinglePart::builder()
+                        .header(header::ContentType::TEXT_HTML)
+                        .body(html.into_string()),
+                ),
+        )
+        .expect("failed to build email");
+
+    let creds = Credentials::new(
+        env::var("SMTP_USERNAME").expect("SMTP_USERNAME must be set"),
+        env::var("SMTP_PASSWORD").expect("SMTP_PASSWORD must be set"),
+    );
+
+    let mailer = SmtpTransport::builder_dangerous(env::var("SMTP_SERVER").expect("SMTP_SERVER must be set"))
+        .port(env::var("SMTP_PORT").expect("SMTP_PORT must be set").parse().unwrap())
+        .credentials(creds)
+        .build();
+
+    println!("Verification URL: {}", _url);
+    match mailer.send(&message) {
+        Ok(_) => println!("Email sent"),
+        Err(e) => println!("Error: {}", e),
+    }
+}
+
 // TODO: Create the endpoint for the email verification function.
 async fn verify_email(
     mut _conn: DbConn,
     State(_session_store): State<MemoryStore>,
     Query(_query): Query<VerifyEmailRequest>,
 ) -> Result<Redirect, Response> {
-    // get token from query
-    let email = token::decode_jwt::<VerifyJwtToken>(&_query.token)
-        .map_err(|_| StatusCode::BAD_REQUEST.into_response())?
-        .email;
-
-    return match user_exists(&mut _conn, &email) {
-        Ok(_) => {
-            verify_user(&mut _conn, &email).expect("TODO: panic message");
-            Ok(Redirect::temporary("/login"))
-        }
-        Err(_) => {
-            Ok(Redirect::temporary("/login"))
-        }
+    let _email = token::decode_jwt::<VerifyJwtToken>(&_query.token)
+        .map_err(|_| StatusCode::BAD_REQUEST.into_response())?.email;
+    info!("Email: {}", _email);
+    if user_exists(&mut _conn, &_email).is_ok() && verify_user(&mut _conn, &_email).is_ok() {
+        info!("User verified");
+        return Ok(Redirect::temporary("/login"));
     }
+    return Ok(Redirect::temporary("/login"));
 }
 
 /// Endpoint used for the first OAuth step
@@ -197,7 +257,7 @@ async fn logout(jar: CookieJar) -> impl IntoResponse {
 
 #[allow(dead_code)]
 fn add_auth_cookie(jar: CookieJar, _user: UserDTO) -> Result<CookieJar, Box<dyn Error>> {
-    let jwt = token::generate_jwt(_user)?;
+    let jwt = token::generate_jwt(_user,3600)?;
     let cookie = Cookie::build("auth", jwt)
         .path("/")
         .secure(true)

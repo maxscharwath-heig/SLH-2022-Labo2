@@ -21,9 +21,9 @@ pub mod token {
         ).map(|data: TokenData<Claims<T>>| data.claims.data);
     }
 
-    pub fn generate_jwt<T: Serialize>(data: T) -> jsonwebtoken::errors::Result<String> {
+    pub fn generate_jwt<T: Serialize>(data: T, ttl: usize) -> jsonwebtoken::errors::Result<String> {
         let secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
-        let exp = (Utc::now().timestamp() + 3600) as usize;
+        let exp = Utc::now().timestamp() as usize + ttl;
         return jsonwebtoken::encode(
             &Header::default(),
             &Claims {
