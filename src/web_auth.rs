@@ -1,5 +1,5 @@
 use std::env;
-use crate::db::{DbConn, get_user, save_user, user_exists, verify_user};
+use crate::db::{DbConn, get_user, save_user, update_password, user_exists, verify_user};
 use crate::models::{AppState, LoginRequest, OAuthRedirect, PasswordUpdateRequest, RegisterRequest, VerifyEmailRequest, VerifyJwtToken};
 use crate::user::{AuthenticationMethod, User, UserDTO};
 use axum::extract::{Query, State};
@@ -12,16 +12,14 @@ use axum_extra::extract::CookieJar;
 use axum_sessions::async_session::MemoryStore;
 use serde_json::json;
 use std::error::Error;
-use std::fmt::format;
 use axum_sessions::async_session::log::info;
-use lettre::{Message, SmtpTransport, Transport};
+use lettre::{Message};
 use lettre::message::{header, MultiPart, SinglePart};
-use lettre::transport::smtp::authentication::Credentials;
-use serde_json::Value::String;
 use crate::hash::hash;
-use crate::schema::users::email;
 use crate::token::token;
+use std::string::String;
 use maud::html;
+use crate::email::send_email;
 
 /// Declares the different endpoints
 /// state is used to pass common structs to the endpoints
@@ -133,6 +131,8 @@ fn send_verification_email(_email: &str) {
         _token
     );
 
+    println!("Verification URL: {}", _url);
+
     let html = html! {
         div {
             h1 { "Verify your email" }
@@ -140,7 +140,6 @@ fn send_verification_email(_email: &str) {
             a href=(_url) { (_url) }
         }
     };
-
     let message = Message::builder()
         .from("SLH Labs <sdr@heig-vd.ch>".parse().unwrap())
         .to(_email.parse().unwrap())
@@ -159,25 +158,9 @@ fn send_verification_email(_email: &str) {
                 ),
         )
         .expect("failed to build email");
-
-    let creds = Credentials::new(
-        env::var("SMTP_USERNAME").expect("SMTP_USERNAME must be set"),
-        env::var("SMTP_PASSWORD").expect("SMTP_PASSWORD must be set"),
-    );
-
-    let mailer = SmtpTransport::builder_dangerous(env::var("SMTP_SERVER").expect("SMTP_SERVER must be set"))
-        .port(env::var("SMTP_PORT").expect("SMTP_PORT must be set").parse().unwrap())
-        .credentials(creds)
-        .build();
-
-    println!("Verification URL: {}", _url);
-    match mailer.send(&message) {
-        Ok(_) => println!("Email sent"),
-        Err(e) => println!("Error: {}", e),
-    }
+    send_email(&message);
 }
 
-// TODO: Create the endpoint for the email verification function.
 async fn verify_email(
     mut _conn: DbConn,
     State(_session_store): State<MemoryStore>,
@@ -240,12 +223,59 @@ async fn oauth_redirect(
 /// POST /password_update
 /// BODY { "old_password": "pass", "new_password": "pass" }
 async fn password_update(
-    _conn: DbConn,
+    mut _conn: DbConn,
     _user: UserDTO,
     Json(_update): Json<PasswordUpdateRequest>,
 ) -> Result<AuthResult, Response> {
-    // TODO: Implement the password update function.
-    Ok(AuthResult::Success)
+    if _update.old_password == _update.new_password {
+        return Ok(AuthResult::Error("New password must be different from old password".to_string()));
+    }
+    // check if old password is correct
+    match get_user(&mut _conn, &_user.email) {
+        Ok(user) => {
+            if hash::verify_password(&_update.old_password, &user.password) {
+                let _hashed_password = hash::password_hash(&_update.new_password);
+                match update_password(&mut _conn, &_user.email, &_hashed_password) {
+                    Ok(_) => {
+                        info!("Password updated");
+                        let html = html! {
+                            div {
+                                h1 { "Password updated" }
+                                p { "This email is to confirm that your password has been updated." }
+                                p { "If you did not request this change, please contact us immediately." }
+                            }
+                        };
+
+                        let message = Message::builder()
+                            .from("SLH Labs <sdr@heig-vd.ch>".parse().unwrap())
+                            .to(_user.email.parse().unwrap())
+                            .subject("Password updated")
+                            .multipart(
+                                MultiPart::alternative() // This is composed of two parts.
+                                    .singlepart(
+                                        SinglePart::builder()
+                                            .header(header::ContentType::TEXT_PLAIN)
+                                            .body(format!("This email is to confirm that your password has been updated. If you did not request this change, please contact us immediately.")),
+                                    )
+                                    .singlepart(
+                                        SinglePart::builder()
+                                            .header(header::ContentType::TEXT_HTML)
+                                            .body(html.into_string()),
+                                    ),
+                            )
+                            .expect("failed to build email");
+                        send_email(&message);
+
+                        Ok(AuthResult::Success)
+                    },
+                    Err(_) => Ok(AuthResult::Error("Failed to update password".to_string())),
+                }
+            } else {
+                Ok(AuthResult::Error("Old password is incorrect".to_string()))
+            }
+        }
+        _ => Ok(AuthResult::Error("Failed to get user".to_string())),
+    }
 }
 
 /// Endpoint handling the logout logic
@@ -268,13 +298,15 @@ fn add_auth_cookie(jar: CookieJar, _user: UserDTO) -> Result<CookieJar, Box<dyn 
 
 enum AuthResult {
     Success,
+    Error(String),
 }
 
 /// Returns a status code and a JSON payload based on the value of the enum
 impl IntoResponse for AuthResult {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            Self::Success => (StatusCode::OK, "Success"),
+            Self::Success => (StatusCode::OK, "Success".to_string()),
+            Self::Error(message) => (StatusCode::BAD_REQUEST, message),
         };
         (status, Json(json!({ "res": message }))).into_response()
     }
