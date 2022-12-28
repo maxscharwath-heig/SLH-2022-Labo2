@@ -1,6 +1,6 @@
-use std::env;
-use lettre::{Message, SmtpTransport, Transport};
 use lettre::transport::smtp::authentication::Credentials;
+use lettre::{Message, SmtpTransport, Transport};
+use std::env;
 
 pub fn send_email(message: &Message) {
     let creds = Credentials::new(
@@ -11,7 +11,12 @@ pub fn send_email(message: &Message) {
     let server = env::var("SMTP_SERVER").expect("SMTP_SERVER must be set");
 
     let mailer = SmtpTransport::builder_dangerous(server)
-        .port(env::var("SMTP_PORT").expect("SMTP_PORT must be set").parse().unwrap())
+        .port(
+            env::var("SMTP_PORT")
+                .expect("SMTP_PORT must be set")
+                .parse()
+                .unwrap(),
+        )
         .credentials(creds)
         .build();
 

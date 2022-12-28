@@ -3,10 +3,10 @@ pub mod token {
 
     use axum_sessions::async_session::chrono::Utc;
     use jsonwebtoken::{DecodingKey, EncodingKey, Header, TokenData, Validation};
-    use serde::{Deserialize, Serialize};
     use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug,Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct Claims<T> {
         data: T,
         exp: usize,
@@ -18,7 +18,8 @@ pub mod token {
             &token,
             &DecodingKey::from_secret(secret.as_ref()),
             &Validation::default(),
-        ).map(|data: TokenData<Claims<T>>| data.claims.data);
+        )
+        .map(|data: TokenData<Claims<T>>| data.claims.data);
     }
 
     pub fn generate_jwt<T: Serialize>(data: T, ttl: usize) -> jsonwebtoken::errors::Result<String> {
@@ -26,10 +27,7 @@ pub mod token {
         let exp = Utc::now().timestamp() as usize + ttl;
         return jsonwebtoken::encode(
             &Header::default(),
-            &Claims {
-                data,
-                exp,
-            },
+            &Claims { data, exp },
             &EncodingKey::from_secret(secret.as_ref()),
         );
     }

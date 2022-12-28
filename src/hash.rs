@@ -1,7 +1,7 @@
 pub mod hash {
-    use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
     use argon2::password_hash::rand_core::OsRng;
     use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
     pub fn verify_password(password: &str, hash: &str) -> bool {
         let hash = PasswordHash::new(hash).unwrap();
@@ -12,9 +12,7 @@ pub mod hash {
     pub fn password_hash(password: &str) -> String {
         let hasher = Argon2::default();
         let salt = SaltString::generate(&mut OsRng);
-        let hash = hasher
-            .hash_password(password.as_bytes(), &salt)
-            .unwrap();
+        let hash = hasher.hash_password(password.as_bytes(), &salt).unwrap();
         hash.to_string()
     }
 }

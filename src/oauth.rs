@@ -1,32 +1,43 @@
 use oauth2::basic::{BasicClient, BasicTokenResponse};
-use oauth2::{AuthUrl, ClientId, ClientSecret, RedirectUrl, TokenResponse, TokenUrl};
+use oauth2::{
+    AuthUrl, ClientId, ClientSecret, RedirectUrl, RevocationUrl, TokenResponse, TokenUrl,
+};
 use once_cell::sync::Lazy;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::env;
 
 #[allow(dead_code)]
 /// Lazy is used to initialize a complex static variable as it is currently not supported in native Rust.
-/// The initialization is done only once when the variable is used for the first time.  
+/// The initialization is done only once when the variable is used for the first time.
 pub static OAUTH_CLIENT: Lazy<BasicClient> = Lazy::new(|| {
-    // TODO: We currently hardcode the credentials, try to improve it.
-    let google_client_id = ClientId::new("GOOGLE_CLIENT_ID".to_string());
-    let google_client_secret = ClientSecret::new("GOOGLE_CLIENT_SECRET".to_string());
+    let google_client_id =
+        ClientId::new(env::var("GOOGLE_CLIENT_ID").expect("GOOGLE_CLIENT_ID must be set"));
+    let google_client_secret = ClientSecret::new(
+        env::var("GOOGLE_CLIENT_SECRET").expect("GOOGLE_CLIENT_SECRET must be set"),
+    );
 
     let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
         .expect("Invalid authorization endpoint URL");
     let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
         .expect("Invalid token endpoint URL");
 
-    // TODO: Set redirect URI, be careful to use the same as the one configured in Google Cloud.
+    let revocation_url =
+        RevocationUrl::new("https://accounts.google.com/o/oauth2/revoke".to_string())
+            .expect("Invalid revocation URL");
+
+    let redirect_url =
+        RedirectUrl::new(env::var("GOOGLE_CALLBACK_URL").expect("GOOGLE_CALLBACK_URL must be set"))
+            .expect("Invalid redirect URL");
+
     BasicClient::new(
         google_client_id,
         Some(google_client_secret),
         auth_url,
         Some(token_url),
     )
-    .set_redirect_uri(
-        RedirectUrl::new("http://localhost:8000/_oauth".to_string()).expect("Invalid redirect URL"),
-    )
+    .set_redirect_uri(redirect_url)
+    .set_revocation_uri(revocation_url)
 });
 
 #[allow(dead_code)]

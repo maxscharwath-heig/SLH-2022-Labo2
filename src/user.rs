@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use strum_macros::{Display, EnumString};
 
-#[derive(Debug,Display, EnumString, Serialize, Deserialize)]
+#[derive(Debug, Display, EnumString, Serialize, Deserialize)]
 pub enum AuthenticationMethod {
     Password,
     OAuth,
@@ -18,7 +18,7 @@ pub struct User {
     pub email_verified: bool,
 }
 
-#[derive(Debug,Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UserDTO {
     pub email: String,
     pub auth_method: AuthenticationMethod,

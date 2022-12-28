@@ -1,4 +1,5 @@
 use crate::db::Pool;
+use crate::token::token;
 use crate::user::UserDTO;
 use axum::async_trait;
 use axum::extract::{FromRef, FromRequestParts};
@@ -6,7 +7,6 @@ use axum::http::request::Parts;
 use axum::response::Redirect;
 use axum::RequestPartsExt;
 use axum_extra::extract::CookieJar;
-use crate::token::token;
 
 const REDIRECT_URL: &str = "/home";
 
@@ -29,13 +29,11 @@ where
         let _jwt = jar.get("auth").ok_or(Redirect::to(REDIRECT_URL))?.value();
 
         return match token::decode_jwt(_jwt) {
-            Ok(user) => {
-                Ok(user)
-            }
+            Ok(user) => Ok(user),
             Err(e) => {
                 println!("User is not authenticated: {}", e);
                 Err(Redirect::to(REDIRECT_URL))
             }
-        }
+        };
     }
 }

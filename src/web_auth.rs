@@ -1,6 +1,12 @@
-use std::env;
-use crate::db::{DbConn, get_user, save_user, update_password, user_exists, verify_user};
-use crate::models::{AppState, LoginRequest, OAuthRedirect, PasswordUpdateRequest, RegisterRequest, VerifyEmailRequest, VerifyJwtToken};
+use crate::db::{get_user, save_user, update_password, user_exists, verify_user, DbConn};
+use crate::email::send_email;
+use crate::hash::hash;
+use crate::models::{
+    AppState, LoginRequest, OAuthRedirect, PasswordUpdateRequest, RegisterRequest,
+    VerifyEmailRequest, VerifyJwtToken,
+};
+use crate::oauth;
+use crate::token::token;
 use crate::user::{AuthenticationMethod, User, UserDTO};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -9,17 +15,16 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
-use axum_sessions::async_session::MemoryStore;
-use serde_json::json;
-use std::error::Error;
 use axum_sessions::async_session::log::info;
-use lettre::{Message};
+use axum_sessions::async_session::{MemoryStore, Session, SessionStore};
 use lettre::message::{header, MultiPart, SinglePart};
-use crate::hash::hash;
-use crate::token::token;
-use std::string::String;
+use lettre::Message;
 use maud::html;
-use crate::email::send_email;
+use oauth2::reqwest::{async_http_client, http_client};
+use oauth2::{AuthorizationCode, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, Scope};
+use serde_json::json;
+use std::env;
+use std::error::Error;
 
 /// Declares the different endpoints
 /// state is used to pass common structs to the endpoints
@@ -63,8 +68,6 @@ async fn login(
         }
     };
 
-
-
     // Once the user has been created, authenticate the user by adding a JWT cookie in the cookie jar
     // let jar = add_auth_cookie(jar, &user_dto)
     //     .or(Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()))?;
@@ -90,9 +93,7 @@ async fn register(
     let _hashed_password = hash::password_hash(&_password);
 
     return match user_exists(&mut _conn, &_email) {
-        Ok(_) => {
-            Err("User already exists".into_response())
-        }
+        Ok(_) => Err("User already exists".into_response()),
         Err(_) => {
             let user = User::new(
                 &_email,
@@ -122,9 +123,13 @@ async fn register(
 }
 
 fn send_verification_email(_email: &str) {
-    let _token = token::generate_jwt(VerifyJwtToken {
-        email: _email.to_string(),
-    }, 10 * 60).expect("Failed to generate token");
+    let _token = token::generate_jwt(
+        VerifyJwtToken {
+            email: _email.to_string(),
+        },
+        10 * 60,
+    )
+    .expect("Failed to generate token");
     let _url = format!(
         "{}/verify?token={}",
         env::var("APP_URL").expect("APP_URL must be set"),
@@ -149,7 +154,10 @@ fn send_verification_email(_email: &str) {
                 .singlepart(
                     SinglePart::builder()
                         .header(header::ContentType::TEXT_PLAIN)
-                        .body(format!("Please click the link below to verify your email: {}", _url)),
+                        .body(format!(
+                            "Please click the link below to verify your email: {}",
+                            _url
+                        )),
                 )
                 .singlepart(
                     SinglePart::builder()
@@ -167,7 +175,8 @@ async fn verify_email(
     Query(_query): Query<VerifyEmailRequest>,
 ) -> Result<Redirect, Response> {
     let _email = token::decode_jwt::<VerifyJwtToken>(&_query.token)
-        .map_err(|_| StatusCode::BAD_REQUEST.into_response())?.email;
+        .map_err(|_| StatusCode::BAD_REQUEST.into_response())?
+        .email;
     info!("Email: {}", _email);
     if user_exists(&mut _conn, &_email).is_ok() && verify_user(&mut _conn, &_email).is_ok() {
         info!("User verified");
@@ -188,12 +197,40 @@ async fn google_oauth(
     //       the user, use the following scope: https://www.googleapis.com/auth/userinfo.email
     //       Use Redirect::to(url) to redirect the user to Google's authentication form.
 
-    // let client = crate::oauth::OAUTH_CLIENT.todo();
+    let (pkce_code_challenge, pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
 
-    // If you need to store data between requests, you may use the session_store. You need to first
-    // create a new Session and store the variables. Then, you add the session to the session_store
-    // to get a session_id. You then store the session_id in a cookie.
-    Ok((jar, Redirect::to("myurl")))
+    let (authorize_url, csrf_state) = oauth::OAUTH_CLIENT
+        .authorize_url(CsrfToken::new_random)
+        // This example is requesting access to the "calendar" features and the user's profile.
+        .add_scope(Scope::new(
+            "https://www.googleapis.com/auth/userinfo.email".to_string(),
+        ))
+        .set_pkce_challenge(pkce_code_challenge)
+        .url();
+
+    let mut session = Session::new();
+    session
+        .insert(
+            "pkce_code_verifier",
+            pkce_code_verifier.secret().to_string(),
+        )
+        .expect("TODO: panic message");
+    session
+        .insert("csrf_state", csrf_state.secret().to_string())
+        .expect("TODO: panic message");
+    let store_cookie = _session_store
+        .store_session(session)
+        .await
+        .unwrap()
+        .unwrap();
+    println!("store_cookie: {:?}", store_cookie);
+
+    let cookie = Cookie::build("session", store_cookie)
+        .path("/")
+        .http_only(true)
+        .finish();
+
+    Ok((jar.add(cookie), Redirect::to(authorize_url.as_ref())))
 }
 
 /// Endpoint called after a successful OAuth login.
@@ -210,12 +247,49 @@ async fn oauth_redirect(
     //       was verified, get the email address with the provided function (get_oauth_email)
     //       and create a JWT for the user.
 
-
     // If you need to recover data between requests, you may use the session_store to load a session
     // based on a session_id.
 
     // Once the OAuth user is authenticated, create the user in the DB and add a JWT cookie
     // let jar = add_auth_cookie(jar, &user_dto).or(Err(StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    let code = AuthorizationCode::new(_params.code.clone());
+    let state = CsrfToken::new(_params.state.clone());
+
+    let session = _session_store
+        .load_session(jar.get("session").unwrap().value().to_string())
+        .await
+        .unwrap()
+        .unwrap();
+    let pkce_code_verifier =
+        PkceCodeVerifier::new(session.get::<String>("pkce_code_verifier").unwrap());
+    let csrf_state = CsrfToken::new(session.get::<String>("csrf_state").unwrap().to_string());
+
+    println!("Google returned the following code:\n{}\n", code.secret());
+    println!(
+        "Google returned the following state:\n{} (expected `{}`)\n",
+        state.secret(),
+        csrf_state.secret()
+    );
+
+    let token = oauth::OAUTH_CLIENT
+        .exchange_code(code)
+        .set_pkce_verifier(pkce_code_verifier)
+        .request_async(async_http_client)
+    .await
+    .unwrap();
+
+    let email = oauth::get_google_oauth_email(&token)
+        .await
+        .expect("Failed to get email");
+
+    let user_dto = UserDTO {
+        email,
+        auth_method: AuthenticationMethod::OAuth,
+    };
+
+    let jar = add_auth_cookie(jar, user_dto).or(Err(StatusCode::INTERNAL_SERVER_ERROR))?;
+
     Ok((jar, Redirect::to("/home")))
 }
 
@@ -228,7 +302,9 @@ async fn password_update(
     Json(_update): Json<PasswordUpdateRequest>,
 ) -> Result<AuthResult, Response> {
     if _update.old_password == _update.new_password {
-        return Ok(AuthResult::Error("New password must be different from old password".to_string()));
+        return Ok(AuthResult::Error(
+            "New password must be different from old password".to_string(),
+        ));
     }
     // check if old password is correct
     match get_user(&mut _conn, &_user.email) {
@@ -267,7 +343,7 @@ async fn password_update(
                         send_email(&message);
 
                         Ok(AuthResult::Success)
-                    },
+                    }
                     Err(_) => Ok(AuthResult::Error("Failed to update password".to_string())),
                 }
             } else {
@@ -287,7 +363,7 @@ async fn logout(jar: CookieJar) -> impl IntoResponse {
 
 #[allow(dead_code)]
 fn add_auth_cookie(jar: CookieJar, _user: UserDTO) -> Result<CookieJar, Box<dyn Error>> {
-    let jwt = token::generate_jwt(_user,3600)?;
+    let jwt = token::generate_jwt(_user, 3600)?;
     let cookie = Cookie::build("auth", jwt)
         .path("/")
         .secure(true)

@@ -62,7 +62,7 @@ pub struct VerifyEmailRequest {
     pub token: String,
 }
 
-#[derive(Debug,Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct VerifyJwtToken {
     pub email: String,
 }
