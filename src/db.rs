@@ -1,11 +1,13 @@
-use crate::schema::*;
-use crate::user::User;
+use std::error::Error;
+
 use axum::async_trait;
 use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, PooledConnection};
-use std::error::Error;
+
+use crate::schema::*;
+use crate::user::User;
 
 type Conn = ConnectionManager<PgConnection>;
 pub type Pool = diesel::r2d2::Pool<Conn>;

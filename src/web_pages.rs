@@ -1,10 +1,11 @@
-use crate::models::*;
-use crate::user::UserDTO;
 use axum::extract::State;
 use axum::response::{Html, IntoResponse, Redirect};
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
 use handlebars::Handlebars;
+
+use crate::models::*;
+use crate::user::UserDTO;
 
 /// Declares the different endpoints
 /// state is used to pass common structs to the endpoints

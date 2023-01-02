@@ -1,12 +1,13 @@
-use crate::db::Pool;
-use crate::token::token;
-use crate::user::UserDTO;
 use axum::async_trait;
 use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
-use axum::response::Redirect;
 use axum::RequestPartsExt;
+use axum::response::Redirect;
 use axum_extra::extract::CookieJar;
+
+use crate::db::Pool;
+use crate::token::token;
+use crate::user::UserDTO;
 
 const REDIRECT_URL: &str = "/home";
 

@@ -3,8 +3,8 @@ pub mod token {
 
     use axum_sessions::async_session::chrono::Utc;
     use jsonwebtoken::{DecodingKey, EncodingKey, Header, TokenData, Validation};
-    use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
+    use serde::de::DeserializeOwned;
 
     #[derive(Debug, Serialize, Deserialize)]
     struct Claims<T> {

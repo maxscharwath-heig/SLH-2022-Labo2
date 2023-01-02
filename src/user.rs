@@ -1,10 +1,12 @@
-use crate::schema::*;
+use std::str::FromStr;
+
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use strum_macros::{Display, EnumString};
 
-#[derive(Debug, Display, EnumString, Serialize, Deserialize)]
+use crate::schema::*;
+
+#[derive(Debug, Display, EnumString, Serialize, Deserialize, PartialEq)]
 pub enum AuthenticationMethod {
     Password,
     OAuth,

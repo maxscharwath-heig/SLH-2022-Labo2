@@ -1,8 +1,9 @@
-use crate::db::Pool;
 use axum::extract::FromRef;
 use axum_sessions::async_session::MemoryStore;
 use handlebars::Handlebars;
 use serde::{Deserialize, Serialize};
+
+use crate::db::Pool;
 
 #[derive(Clone)]
 pub struct AppState {

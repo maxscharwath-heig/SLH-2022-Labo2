@@ -1,14 +1,16 @@
-use crate::db::Pool;
-use crate::models::AppState;
+use std::env;
+use std::net::SocketAddr;
+
 use axum::Router;
 use axum_sessions::async_session::MemoryStore;
-use diesel::r2d2::ConnectionManager;
 use diesel::PgConnection;
+use diesel::r2d2::ConnectionManager;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use dotenv::dotenv;
 use handlebars::Handlebars;
-use std::env;
-use std::net::SocketAddr;
+
+use crate::db::Pool;
+use crate::models::AppState;
 
 mod auth;
 mod db;
