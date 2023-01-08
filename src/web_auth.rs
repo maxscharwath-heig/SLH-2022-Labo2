@@ -1,24 +1,24 @@
 use std::env;
 use std::error::Error;
 
-use axum::{Json, Router};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use axum::{Json, Router};
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use axum_sessions::async_session::{MemoryStore, Session, SessionStore};
 use handlebars::Handlebars;
 use lazy_static::lazy_static;
-use regex::Regex;
 use lettre::message::{header, MultiPart, SinglePart};
 use lettre::Message;
-use oauth2::{AuthorizationCode, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, Scope};
 use oauth2::reqwest::async_http_client;
+use oauth2::{AuthorizationCode, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, Scope};
+use regex::Regex;
 use serde_json::json;
 
-use crate::db::{DbConn, get_user, save_user, update_password, user_exists, verify_user};
+use crate::db::{get_user, save_user, update_password, user_exists, verify_user, DbConn};
 use crate::email::send_email;
 use crate::hash::hash;
 use crate::models::{
@@ -37,6 +37,7 @@ pub fn stage(state: AppState) -> Router {
         .route("/register", post(register))
         .route("/verify", get(verify_email))
         .route("/oauth/google", get(google_oauth))
+        .route("/oauth/github", get(github_oauth))
         .route("/_oauth", get(oauth_redirect))
         .route("/password_update", post(password_update))
         .route("/logout", get(logout))
@@ -64,13 +65,19 @@ async fn login(
                     .or(Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()))?;
                 Ok((jar, AuthResult::Success))
             } else {
-                Ok((jar, AuthResult::Error(StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())))
+                Ok((
+                    jar,
+                    AuthResult::Error(StatusCode::UNAUTHORIZED, "Invalid credentials".to_string()),
+                ))
             }
         }
         Err(_) => {
             // fake hash to prevent timing attacks
             hash::fake_verify_password(&password);
-            Ok((jar, AuthResult::Error(StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())))
+            Ok((
+                jar,
+                AuthResult::Error(StatusCode::UNAUTHORIZED, "Invalid credentials".to_string()),
+            ))
         }
     };
 }
@@ -88,19 +95,17 @@ async fn register(
     let password2 = register.register_password2;
 
     if password != password2 {
-        return Ok(
-            AuthResult::Error(
-                StatusCode::BAD_REQUEST,
-                "Passwords do not match".to_string()
-            ));
+        return Ok(AuthResult::Error(
+            StatusCode::BAD_REQUEST,
+            "Passwords do not match".to_string(),
+        ));
     }
 
     if !check_email(email.as_str()) {
-        return Ok(
-            AuthResult::Error(
-                StatusCode::BAD_REQUEST,
-                "Invalid email".to_string()
-            ));
+        return Ok(AuthResult::Error(
+            StatusCode::BAD_REQUEST,
+            "Invalid email".to_string(),
+        ));
     }
 
     if !check_password(password.as_str()) {
@@ -140,7 +145,9 @@ async fn register(
 
 fn check_password(password: &str) -> bool {
     let password_strength = zxcvbn::zxcvbn(&password, &[]).unwrap();
-    return password.chars().count() >= 8 && password.chars().count() <= 64 && password_strength.score() >= 3;
+    return password.chars().count() >= 8
+        && password.chars().count() <= 64
+        && password_strength.score() >= 3;
 }
 
 fn check_email(email: &str) -> bool {
@@ -220,8 +227,9 @@ async fn google_oauth(
     State(session_store): State<MemoryStore>,
 ) -> Result<(CookieJar, Redirect), StatusCode> {
     let (pkce_code_challenge, pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
-
-    let (authorize_url, csrf_state) = oauth::OAUTH_CLIENT
+    let provider = oauth::OAuthProvider::Google;
+    let (authorize_url, csrf_state) = provider
+        .get_client()
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new(
             "https://www.googleapis.com/auth/userinfo.email".to_string(),
@@ -239,6 +247,44 @@ async fn google_oauth(
     session
         .insert("csrf_state", csrf_state.secret().to_string())
         .unwrap();
+    session.insert("oauth_provider", provider).unwrap();
+
+    let store_cookie = session_store.store_session(session).await.unwrap().unwrap();
+
+    let cookie = Cookie::build("session", store_cookie)
+        .path("/")
+        .secure(true)
+        .http_only(true)
+        .finish();
+
+    Ok((jar.add(cookie), Redirect::to(authorize_url.as_ref())))
+}
+
+/// Endpoint used for the first Github OAuth step
+async fn github_oauth(
+    jar: CookieJar,
+    State(session_store): State<MemoryStore>,
+) -> Result<(CookieJar, Redirect), StatusCode> {
+    let (pkce_code_challenge, pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
+    let provider = oauth::OAuthProvider::Github;
+    let (authorize_url, csrf_state) = provider
+        .get_client()
+        .authorize_url(CsrfToken::new_random)
+        .add_scope(Scope::new("user:email".to_string()))
+        .set_pkce_challenge(pkce_code_challenge)
+        .url();
+
+    let mut session = Session::new();
+    session
+        .insert(
+            "pkce_code_verifier",
+            pkce_code_verifier.secret().to_string(),
+        )
+        .unwrap();
+    session
+        .insert("csrf_state", csrf_state.secret().to_string())
+        .unwrap();
+    session.insert("oauth_provider", provider).unwrap();
 
     let store_cookie = session_store.store_session(session).await.unwrap().unwrap();
 
@@ -268,6 +314,10 @@ async fn oauth_redirect(
         .unwrap()
         .unwrap();
 
+    let provider = session
+        .get::<oauth::OAuthProvider>("oauth_provider")
+        .unwrap();
+
     let pkce_code_verifier =
         PkceCodeVerifier::new(session.get::<String>("pkce_code_verifier").unwrap());
     let csrf_state = CsrfToken::new(session.get::<String>("csrf_state").unwrap().to_string());
@@ -276,14 +326,15 @@ async fn oauth_redirect(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let token = oauth::OAUTH_CLIENT
+    let token = provider
+        .get_client()
         .exchange_code(code)
         .set_pkce_verifier(pkce_code_verifier)
         .request_async(async_http_client)
         .await
         .unwrap();
 
-    let email = oauth::get_google_oauth_email(&token).await.unwrap();
+    let email = provider.get_email(&token).await.unwrap();
 
     let user = match get_user(&mut conn, &email) {
         Err(_) => {
@@ -293,7 +344,6 @@ async fn oauth_redirect(
         }
         Ok(user) => user,
     };
-
 
     // accept only verified users and users with Google authentication
     if !user.email_verified || user.get_auth_method() != AuthenticationMethod::OAuth {
@@ -326,7 +376,7 @@ async fn password_update(
         ));
     }
 
-    if !check_password(update.new_password.as_str()){
+    if !check_password(update.new_password.as_str()) {
         return Ok(AuthResult::Error(
             StatusCode::BAD_REQUEST,
             "Password is not strong enough".to_string(),

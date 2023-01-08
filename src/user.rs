@@ -9,7 +9,7 @@ use crate::schema::*;
 #[derive(Debug, Display, EnumString, Serialize, Deserialize, PartialEq)]
 pub enum AuthenticationMethod {
     Password,
-    OAuth,
+    OAuth
 }
 
 #[derive(Debug, Deserialize, Serialize, Queryable, Insertable)]
