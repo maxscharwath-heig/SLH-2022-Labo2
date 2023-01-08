@@ -21,15 +21,13 @@ where
     type Rejection = Redirect;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // TODO: You have to read the auth cookie and verify the JWT to ensure the user is
-        //       authenticated.
         let jar = parts
             .extract::<CookieJar>()
             .await
             .expect("Could not get CookieJar from request parts");
         let _jwt = jar.get("auth").ok_or(Redirect::to(REDIRECT_URL))?.value();
 
-        return match token::decode_jwt(_jwt) {
+        return match token::decode_jwt(_jwt, "auth") {
             Ok(user) => Ok(user),
             Err(e) => {
                 println!("User is not authenticated: {}", e);

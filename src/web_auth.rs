@@ -63,13 +63,13 @@ async fn login(
                     .or(Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()))?;
                 Ok((jar, AuthResult::Success))
             } else {
-                Ok((jar, AuthResult::Error("Invalid credentials".to_string())))
+                Ok((jar, AuthResult::Error(StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())))
             }
         }
         Err(_) => {
             // fake hash to prevent timing attacks
             hash::fake_verify_password(&password);
-            Ok((jar, AuthResult::Error("Invalid credentials".to_string())))
+            Ok((jar, AuthResult::Error(StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())))
         }
     };
 }
@@ -87,7 +87,18 @@ async fn register(
     let password2 = register.register_password2;
 
     if password != password2 {
-        return Err(StatusCode::BAD_REQUEST.into_response());
+        return Ok(
+            AuthResult::Error(
+                StatusCode::BAD_REQUEST,
+                "Passwords do not match".to_string()
+            ));
+    }
+
+    if !check_password(password.as_str()) {
+        return Ok(AuthResult::Error(
+            StatusCode::BAD_REQUEST,
+            "Password is not strong enough".to_string(),
+        ));
     }
 
     let hashed_password = hash::password_hash(&password);
@@ -107,12 +118,16 @@ async fn register(
                     Ok(AuthResult::Success)
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
                     Err("Error".into_response())
                 }
             }
         }
     };
+}
+
+fn check_password(password: &str) -> bool {
+    let password_strength = zxcvbn::zxcvbn(&password, &[]).unwrap();
+    return password.chars().count() >= 8 && password.chars().count() <= 64 && password_strength.score() >= 3;
 }
 
 fn send_verification_email(email: &str, hbs: &Handlebars<'_>) {
@@ -121,6 +136,7 @@ fn send_verification_email(email: &str, hbs: &Handlebars<'_>) {
             email: email.to_string(),
         },
         10 * 60,
+        "verify",
     )
     .expect("Failed to generate token");
     let url = format!(
@@ -168,12 +184,10 @@ async fn verify_email(
     State(_session_store): State<MemoryStore>,
     Query(query): Query<VerifyEmailRequest>,
 ) -> Result<Redirect, Response> {
-    let email = token::decode_jwt::<VerifyJwtToken>(&query.token)
+    let email = token::decode_jwt::<VerifyJwtToken>(&query.token, "verify")
         .map_err(|_| StatusCode::BAD_REQUEST.into_response())?
         .email;
-    info!("Email: {}", email);
     if user_exists(&mut conn, &email).is_ok() && verify_user(&mut conn, &email).is_ok() {
-        info!("User verified");
         return Ok(Redirect::temporary("/login"));
     }
     return Ok(Redirect::temporary("/login"));
@@ -210,6 +224,7 @@ async fn google_oauth(
 
     let cookie = Cookie::build("session", store_cookie)
         .path("/")
+        .secure(true)
         .http_only(true)
         .finish();
 
@@ -278,11 +293,25 @@ async fn password_update(
     user: UserDTO,
     Json(update): Json<PasswordUpdateRequest>,
 ) -> Result<AuthResult, Response> {
+    if user.auth_method != AuthenticationMethod::Password {
+        // only password users can update their password
+        return Err(StatusCode::UNAUTHORIZED.into_response());
+    }
+
     if update.old_password == update.new_password {
         return Ok(AuthResult::Error(
+            StatusCode::BAD_REQUEST,
             "New password must be different from old password".to_string(),
         ));
     }
+
+    if !check_password(update.new_password.as_str()){
+        return Ok(AuthResult::Error(
+            StatusCode::BAD_REQUEST,
+            "Password is not strong enough".to_string(),
+        ));
+    }
+
     // check if old password is correct
     match get_user(&mut conn, &user.email) {
         Ok(user) => {
@@ -290,7 +319,6 @@ async fn password_update(
                 let _hashed_password = hash::password_hash(&update.new_password);
                 match update_password(&mut conn, &user.email, &_hashed_password) {
                     Ok(_) => {
-                        info!("Password updated");
                         let html = hbs
                             .render(
                                 "password_updated",
@@ -322,13 +350,22 @@ async fn password_update(
 
                         Ok(AuthResult::Success)
                     }
-                    Err(_) => Ok(AuthResult::Error("Failed to update password".to_string())),
+                    Err(_) => Ok(AuthResult::Error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to update password".to_string(),
+                    )),
                 }
             } else {
-                Ok(AuthResult::Error("Old password is incorrect".to_string()))
+                Ok(AuthResult::Error(
+                    StatusCode::BAD_REQUEST,
+                    "Old password is incorrect".to_string(),
+                ))
             }
         }
-        _ => Ok(AuthResult::Error("Failed to get user".to_string())),
+        _ => Ok(AuthResult::Error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to update password".to_string(),
+        )),
     }
 }
 
@@ -341,7 +378,7 @@ async fn logout(jar: CookieJar) -> impl IntoResponse {
 
 #[allow(dead_code)]
 fn add_auth_cookie(jar: CookieJar, user: UserDTO) -> Result<CookieJar, Box<dyn Error>> {
-    let jwt = token::generate_jwt(user, 3600)?;
+    let jwt = token::generate_jwt(user, 3600, "auth")?;
     let cookie = Cookie::build("auth", jwt)
         .path("/")
         .secure(true)
@@ -352,7 +389,7 @@ fn add_auth_cookie(jar: CookieJar, user: UserDTO) -> Result<CookieJar, Box<dyn E
 
 enum AuthResult {
     Success,
-    Error(String),
+    Error(StatusCode, String),
 }
 
 /// Returns a status code and a JSON payload based on the value of the enum
@@ -360,7 +397,7 @@ impl IntoResponse for AuthResult {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             Self::Success => (StatusCode::OK, "Success".to_string()),
-            Self::Error(message) => (StatusCode::BAD_REQUEST, message),
+            Self::Error(status, message) => (status, message),
         };
         (status, Json(json!({ "res": message }))).into_response()
     }

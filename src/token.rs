@@ -12,23 +12,25 @@ pub mod token {
         exp: usize,
     }
 
-    pub fn decode_jwt<T: DeserializeOwned>(token: &str) -> jsonwebtoken::errors::Result<T> {
+    pub fn decode_jwt<T: DeserializeOwned>(token: &str, prefix: &str) -> jsonwebtoken::errors::Result<T> {
         let secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+        let secret_prefixed = secret+ prefix;
         return jsonwebtoken::decode::<Claims<T>>(
             &token,
-            &DecodingKey::from_secret(secret.as_ref()),
+            &DecodingKey::from_secret(secret_prefixed.as_ref()),
             &Validation::default(),
         )
         .map(|data: TokenData<Claims<T>>| data.claims.data);
     }
 
-    pub fn generate_jwt<T: Serialize>(data: T, ttl: usize) -> jsonwebtoken::errors::Result<String> {
+    pub fn generate_jwt<T: Serialize>(data: T, ttl: usize, prefix: &str) -> jsonwebtoken::errors::Result<String> {
         let secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+        let secret_prefixed = secret+ prefix;
         let exp = Utc::now().timestamp() as usize + ttl;
         return jsonwebtoken::encode(
             &Header::default(),
             &Claims { data, exp },
-            &EncodingKey::from_secret(secret.as_ref()),
+            &EncodingKey::from_secret(secret_prefixed.as_ref()),
         );
     }
 }
