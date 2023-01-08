@@ -113,7 +113,10 @@ async fn register(
     let hashed_password = hash::password_hash(&password);
 
     return match user_exists(&mut conn, &email) {
-        Ok(_) => Err("User already exists".into_response()),
+        Ok(_) => Ok(AuthResult::Error(
+            StatusCode::BAD_REQUEST,
+            "User already exists".to_string(),
+        )),
         Err(_) => {
             let user = User::new(
                 &email,
@@ -121,7 +124,7 @@ async fn register(
                 AuthenticationMethod::Password,
                 false,
             );
-            match save_user(&mut conn, user) {
+            match save_user(&mut conn, &user) {
                 Ok(_) => {
                     send_verification_email(&email, &hbs);
                     Ok(AuthResult::Success)
@@ -285,11 +288,12 @@ async fn oauth_redirect(
     let user = match get_user(&mut conn, &email) {
         Err(_) => {
             let user = User::new(&email, "", AuthenticationMethod::OAuth, true);
-            save_user(&mut conn, user).unwrap();
-            get_user(&mut conn, &email).unwrap()
+            save_user(&mut conn, &user).unwrap();
+            user
         }
         Ok(user) => user,
     };
+
 
     // accept only verified users and users with Google authentication
     if !user.email_verified || user.get_auth_method() != AuthenticationMethod::OAuth {

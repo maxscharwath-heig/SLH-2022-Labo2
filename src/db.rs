@@ -40,7 +40,7 @@ pub fn get_user(conn: &mut DbConn, email: &str) -> Result<User, Box<dyn Error>> 
 
 #[allow(dead_code)]
 /// Save a user inside the DB
-pub fn save_user(conn: &mut DbConn, user: User) -> Result<(), Box<dyn Error>> {
+pub fn save_user(conn: &mut DbConn, user: &User) -> Result<(), Box<dyn Error>> {
     diesel::insert_into(users::table)
         .values(user)
         .execute(&mut conn.0)
